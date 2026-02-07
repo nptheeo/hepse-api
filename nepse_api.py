@@ -1,7 +1,6 @@
 import warnings
 from urllib3.exceptions import InsecureRequestWarning
 warnings.filterwarnings('ignore', category=InsecureRequestWarning)
-
 from flask import Flask, jsonify, request
 from nepse_scraper import NepseScraper
 from datetime import datetime
@@ -12,148 +11,227 @@ app = Flask(__name__)
 CORS(app)
 
 scraper = NepseScraper(verify_ssl=False)
-
 cached_data = None
 cache_time = None
 
 def get_stock_data():
     global cached_data, cache_time
-    if cached_data is None or (datetime.now() - cache_time).seconds > 60:
-        cached_data = scraper.get_today_price()
-        cache_time = datetime.now()
-    return cached_data
+    try:
+        if cached_data is None or (datetime.now() - cache_time).seconds > 60:
+            cached_data = scraper.get_today_price()
+            cache_time = datetime.now()
+        return cached_data
+    except Exception as e:
+        print(f"Error fetching stock data: {e}")
+        return []
 
 @app.route('/api/stock/<symbol>', methods=['GET'])
 def get_stock(symbol):
     """Get data for a specific stock"""
-    symbol = symbol.upper()
-    today_prices = get_stock_data()
-
-    stock_data = next((s for s in today_prices if s['symbol'] == symbol), None)
-
-    if stock_data:
-        change = stock_data['closePrice'] - stock_data['previousDayClosePrice']
-        change_percent = (change / stock_data['previousDayClosePrice']) * 100
-
-        return jsonify({
-            "success": True,
-            "timestamp": datetime.now().isoformat(),
-            "data": {
-                "symbol": stock_data['symbol'],
-                "companyName": stock_data['securityName'],
-                "businessDate": stock_data['businessDate'],
-                "price": {
-                    "current": stock_data['closePrice'],
-                    "open": stock_data['openPrice'],
-                    "high": stock_data['highPrice'],
-                    "low": stock_data['lowPrice'],
-                    "previousClose": stock_data['previousDayClosePrice'],
-                    "change": round(change, 2),
-                    "changePercent": round(change_percent, 2),
-                    "averagePrice": stock_data['averageTradedPrice']
-                },
-                "trading": {
-                    "volume": stock_data['totalTradedQuantity'],
-                    "totalTrades": stock_data['totalTrades'],
-                    "turnover": stock_data['totalTradedValue']
-                },
-                "yearRange": {
-                    "high52Week": stock_data['fiftyTwoWeekHigh'],
-                    "low52Week": stock_data['fiftyTwoWeekLow']
-                },
-                "marketCap": stock_data['marketCapitalization'],
-                "lastUpdated": stock_data['lastUpdatedTime']
-            }
-        })
-    else:
+    try:
+        symbol = symbol.upper()
+        today_prices = get_stock_data()
+        
+        if not today_prices:
+            return jsonify({"success": False, "error": "Unable to fetch stock data"}), 503
+        
+        stock_data = next((s for s in today_prices if s['symbol'] == symbol), None)
+        
+        if stock_data:
+            prev_close = stock_data.get('previousDayClosePrice', 0)
+            if prev_close == 0:
+                change_percent = 0
+            else:
+                change = stock_data['closePrice'] - prev_close
+                change_percent = (change / prev_close) * 100
+            
+            return jsonify({
+                "success": True,
+                "timestamp": datetime.now().isoformat(),
+                "data": {
+                    "symbol": stock_data['symbol'],
+                    "companyName": stock_data.get('securityName', 'N/A'),
+                    "businessDate": stock_data.get('businessDate', 'N/A'),
+                    "price": {
+                        "current": stock_data.get('closePrice', 0),
+                        "open": stock_data.get('openPrice', 0),
+                        "high": stock_data.get('highPrice', 0),
+                        "low": stock_data.get('lowPrice', 0),
+                        "previousClose": stock_data.get('previousDayClosePrice', 0),
+                        "change": round(stock_data.get('closePrice', 0) - prev_close, 2),
+                        "changePercent": round(change_percent, 2),
+                        "averagePrice": stock_data.get('averageTradedPrice', 0)
+                    },
+                    "trading": {
+                        "volume": stock_data.get('totalTradedQuantity', 0),
+                        "totalTrades": stock_data.get('totalTrades', 0),
+                        "turnover": stock_data.get('totalTradedValue', 0)
+                    },
+                    "yearRange": {
+                        "high52Week": stock_data.get('fiftyTwoWeekHigh', 0),
+                        "low52Week": stock_data.get('fiftyTwoWeekLow', 0)
+                    },
+                    "marketCap": stock_data.get('marketCapitalization', 0),
+                    "lastUpdated": stock_data.get('lastUpdatedTime', 'N/A')
+                }
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "timestamp": datetime.now().isoformat(),
+                "error": f"Stock '{symbol}' not found"
+            }), 404
+    except Exception as e:
         return jsonify({
             "success": False,
-            "timestamp": datetime.now().isoformat(),
-            "error": f"Stock '{symbol}' not found"
-        }), 404
+            "error": f"Server error: {str(e)}"
+        }), 500
 
 @app.route('/api/stocks', methods=['GET'])
 def get_all_stocks():
     """Get all stocks data"""
-    today_prices = get_stock_data()
-
-    stocks = []
-    for stock in today_prices:
-        change = stock['closePrice'] - stock['previousDayClosePrice']
-        change_percent = (change / stock['previousDayClosePrice']) * 100
-
-        stocks.append({
-            "symbol": stock['symbol'],
-            "companyName": stock['securityName'],
-            "closePrice": stock['closePrice'],
-            "change": round(change, 2),
-            "changePercent": round(change_percent, 2),
-            "volume": stock['totalTradedQuantity']
+    try:
+        today_prices = get_stock_data()
+        
+        if not today_prices:
+            return jsonify({"success": False, "error": "Unable to fetch stock data"}), 503
+        
+        stocks = []
+        for stock in today_prices:
+            try:
+                prev_close = stock.get('previousDayClosePrice', 0)
+                if prev_close == 0:
+                    change_percent = 0
+                else:
+                    change = stock['closePrice'] - prev_close
+                    change_percent = (change / prev_close) * 100
+                
+                stocks.append({
+                    "symbol": stock['symbol'],
+                    "companyName": stock.get('securityName', 'N/A'),
+                    "closePrice": stock.get('closePrice', 0),
+                    "change": round(stock.get('closePrice', 0) - prev_close, 2),
+                    "changePercent": round(change_percent, 2),
+                    "volume": stock.get('totalTradedQuantity', 0)
+                })
+            except Exception as e:
+                print(f"Error processing stock {stock.get('symbol', 'Unknown')}: {e}")
+                continue
+        
+        return jsonify({
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "totalStocks": len(stocks),
+            "data": stocks
         })
-
-    return jsonify({
-        "success": True,
-        "timestamp": datetime.now().isoformat(),
-        "totalStocks": len(stocks),
-        "data": stocks
-    })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": f"Server error: {str(e)}"
+        }), 500
 
 @app.route('/api/gainers', methods=['GET'])
 def get_gainers():
     """Get top gainers"""
-    limit = request.args.get('limit', default=10, type=int)
-    today_prices = get_stock_data()
-
-    sorted_stocks = sorted(
-        today_prices,
-        key=lambda x: ((x['closePrice'] - x['previousDayClosePrice']) / x['previousDayClosePrice']) * 100,
-        reverse=True
-    )[:limit]
-
-    gainers = []
-    for stock in sorted_stocks:
-        change = stock['closePrice'] - stock['previousDayClosePrice']
-        change_percent = (change / stock['previousDayClosePrice']) * 100
-        gainers.append({
-            "symbol": stock['symbol'],
-            "companyName": stock['securityName'],
-            "closePrice": stock['closePrice'],
-            "changePercent": round(change_percent, 2)
+    try:
+        limit = request.args.get('limit', default=10, type=int)
+        today_prices = get_stock_data()
+        
+        if not today_prices:
+            return jsonify({"success": False, "error": "Unable to fetch stock data"}), 503
+        
+        # Filter out stocks with zero previous close
+        valid_stocks = []
+        for stock in today_prices:
+            try:
+                if stock.get('previousDayClosePrice', 0) != 0:
+                    valid_stocks.append(stock)
+            except:
+                continue
+        
+        sorted_stocks = sorted(
+            valid_stocks,
+            key=lambda x: ((x['closePrice'] - x['previousDayClosePrice']) / x['previousDayClosePrice']) * 100,
+            reverse=True
+        )[:limit]
+        
+        gainers = []
+        for stock in sorted_stocks:
+            try:
+                prev_close = stock.get('previousDayClosePrice', 1)
+                change = stock.get('closePrice', 0) - prev_close
+                change_percent = (change / prev_close) * 100
+                gainers.append({
+                    "symbol": stock['symbol'],
+                    "companyName": stock.get('securityName', 'N/A'),
+                    "closePrice": stock.get('closePrice', 0),
+                    "changePercent": round(change_percent, 2)
+                })
+            except Exception as e:
+                print(f"Error processing stock {stock.get('symbol', 'Unknown')}: {e}")
+                continue
+        
+        return jsonify({
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "data": gainers
         })
-
-    return jsonify({
-        "success": True,
-        "timestamp": datetime.now().isoformat(),
-        "data": gainers
-    })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": f"Server error: {str(e)}"
+        }), 500
 
 @app.route('/api/losers', methods=['GET'])
 def get_losers():
     """Get top losers"""
-    limit = request.args.get('limit', default=10, type=int)
-    today_prices = get_stock_data()
-
-    sorted_stocks = sorted(
-        today_prices,
-        key=lambda x: ((x['closePrice'] - x['previousDayClosePrice']) / x['previousDayClosePrice']) * 100
-    )[:limit]
-
-    losers = []
-    for stock in sorted_stocks:
-        change = stock['closePrice'] - stock['previousDayClosePrice']
-        change_percent = (change / stock['previousDayClosePrice']) * 100
-        losers.append({
-            "symbol": stock['symbol'],
-            "companyName": stock['securityName'],
-            "closePrice": stock['closePrice'],
-            "changePercent": round(change_percent, 2)
+    try:
+        limit = request.args.get('limit', default=10, type=int)
+        today_prices = get_stock_data()
+        
+        if not today_prices:
+            return jsonify({"success": False, "error": "Unable to fetch stock data"}), 503
+        
+        # Filter out stocks with zero previous close
+        valid_stocks = []
+        for stock in today_prices:
+            try:
+                if stock.get('previousDayClosePrice', 0) != 0:
+                    valid_stocks.append(stock)
+            except:
+                continue
+        
+        sorted_stocks = sorted(
+            valid_stocks,
+            key=lambda x: ((x['closePrice'] - x['previousDayClosePrice']) / x['previousDayClosePrice']) * 100
+        )[:limit]
+        
+        losers = []
+        for stock in sorted_stocks:
+            try:
+                prev_close = stock.get('previousDayClosePrice', 1)
+                change = stock.get('closePrice', 0) - prev_close
+                change_percent = (change / prev_close) * 100
+                losers.append({
+                    "symbol": stock['symbol'],
+                    "companyName": stock.get('securityName', 'N/A'),
+                    "closePrice": stock.get('closePrice', 0),
+                    "changePercent": round(change_percent, 2)
+                })
+            except Exception as e:
+                print(f"Error processing stock {stock.get('symbol', 'Unknown')}: {e}")
+                continue
+        
+        return jsonify({
+            "success": True,
+            "timestamp": datetime.now().isoformat(),
+            "data": losers
         })
-
-    return jsonify({
-        "success": True,
-        "timestamp": datetime.now().isoformat(),
-        "data": losers
-    })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": f"Server error: {str(e)}"
+        }), 500
 
 @app.route('/', methods=['GET'])
 def home():
